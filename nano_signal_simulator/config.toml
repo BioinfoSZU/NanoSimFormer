@@ -1,0 +1,79 @@
+version = 1.0
+
+[ont_r1041_dna_5khz]
+checkpoint = "dna_r10.4.1"
+chunksize = 1000
+max_duration_ranges = 2500
+
+[ont_r1041_dna_5khz.basecall]
+model = "dna_r10.4.1_e8.2_400bps_sup@v5.0.0"
+
+[ont_r1041_dna_5khz.length_dist]
+model = "ont_r1041_5khz_dna_read_len_dist.pkl"
+loc = 40.0
+scale = 6720.3016442
+mean_len = 6760.0
+basic_mean_len = 6760.0
+
+[ont_r1041_dna_5khz.duration_params]
+dist = "gaussian"
+mean = 2.0
+stdv = 0.5
+
+[ont_r1041_dna_5khz.noise_intensity_params]
+dist = "gamma"
+shape = 1.8516943932132568
+scale = 0.55
+
+[ont_r1041_dna_5khz.pod5_params]
+digistiation = 2048
+range = 383.1190490722656
+zc_pa_shift = 93.69239463939118
+zc_pa_scale = 23.506745239082388
+default_pa_scale = 4595907921878974464
+offset_mean = -245.7148998
+offset_stdv = 17.27816311058442
+median_before_mean = 198.21038452225937
+median_before_stdv = 18.768584852088598
+adc_max = 2047  # maximum ADC value
+adc_min = 0     # minimum ADC value
+flow_cell = 'FLO-PRO114M'
+sequencing_kit = 'sqk-lsk114'
+protocol_name = 'sequencing/sequencing_PRO114_DNA_e8_2_400K:FLO-PRO114M:SQK-LSK114:400'
+sample_rate = 5000
+
+
+[ont_rna004_4khz]
+checkpoint = "rna004_v3"
+chunksize = 1000
+max_duration_ranges = 7000
+
+[ont_rna004_4khz.basecall]
+model = "rna004_130bps_sup@v5.0.0"
+
+[ont_rna004_4khz.duration_params]
+dist = "gamma"
+mean = 6.0
+stdv = 4.24
+
+[ont_rna004_4khz.noise_intensity_params]
+dist = "gamma"
+shape = 1.25
+scale = 0.5
+
+[ont_rna004_4khz.pod5_params]
+digistiation = 2048
+range = 299.43206787109375
+zc_pa_shift = 80.8758975922949
+zc_pa_scale = 17.26975967138176
+default_pa_scale = 4594435684936187904
+offset_mean = -259.4656264
+offset_stdv = 16.041786523190705
+median_before_mean = 205.15230470208675
+median_before_stdv = 9.451507427713517
+adc_max = 2047  # maximum ADC value
+adc_min = 0     # minimum ADC value
+flow_cell = 'FLO-PRO004RA'
+sequencing_kit = 'sqk-rna004'
+protocol_name = 'sequencing/sequencing_PRO004RA_RNA:FLO-PRO004RA:SQK-RNA004:130'
+sample_rate = 4000
