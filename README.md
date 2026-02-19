@@ -132,7 +132,7 @@ python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/example.fastq
 ```
 
 #### Full Pipeline (Signal simulation + Basecalling) 
-Use `--basecall` option to automatically run Dorado that basecalling the reads into a FASTQ file after signal simulation.
+Use `--basecall` option to automatically run [Dorado](https://github.com/nanoporetech/dorado) that basecalling the reads into a FASTQ file after signal simulation.
 
 ```shell 
 # Simulate 1000 reads from the chromosome 22 reference. 
