@@ -1,7 +1,8 @@
 NanoSimFormer An end-to-end Transformer-based simulator for nanopore sequencing signal data
 -----
 
-NanoSimFormer is a high-fidelity nanopore sequencing signal simulator built on Transformer architectures. It supports both DNA (R10.4.1) and Direct RNA (RNA004) signal simulation, enabling users to generate synthetic POD5 files from references or existing basecalled reads.
+NanoSimFormer is a high-fidelity nanopore sequencing signal simulator built on Transformer architectures.
+It supports both ONT DNA (R10.4.1) and direct-RNA (RNA004) signal simulation, enabling users to generate synthetic POD5 files from references or existing basecalled reads.
 
 ## 🚀 Download and Installation
 
