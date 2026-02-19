@@ -86,26 +86,26 @@ options:
 ### DNA Sequencing Simulation Examples (R10.4.1)
 
 #### Reference-Based Simulation
-Simulate reads from a reference genome (FASTA) using a specific read number or targeted sequencing coverage.
+Simulate reads from a reference genome (FASTA) given a specific read number or sequencing coverage.
 
 ```shell
 # Simulate 1000 reads from the chromosome 22 reference.
 # The output POD5 will be located at ${EXAMPLE_DIR}/DNA_R10.4.1/output/simulate.pod5
 python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/chr22.fasta --output ${EXAMPLE_DIR}/DNA_R10.4.1/output --mode Reference --sample-reads 1000 --gpu 0 --preset ont_r1041_dna_5khz 
 
-# Simulate reads with 0.1x sequencing depth from the chromosome 22 reference.
+# Simulate reads with 0.1x sequencing coverage from the chromosome 22 reference.
 python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/chr22.fasta --output ${EXAMPLE_DIR}/DNA_R10.4.1/output --mode Reference --coverage 0.1 --gpu 0 --preset ont_r1041_dna_5khz
 ```
 
 #### Adjusting Noise and Duration parameters
-Adjust the standard deviation of the noise or duration samplers to generate simulated signals with varying qualities.
+Adjust the standard deviation of the amplitude noise or duration samplers to generate simulated signals with varying qualities.
 
 ```shell 
 python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/chr22.fasta --output ${EXAMPLE_DIR}/DNA_R10.4.1/output --mode Reference --sample-reads 1000 --gpu 0 --preset ont_r1041_dna_5khz --noise-stdv 1.0 --duration-stdv 0.8
 ```
 
 #### Circular Reference-Based Simulation
-NanoSimFormer detects circularity via the FASTA header (circular=true/false, see example FASTA below) to allow simulated reads to seamlessly wrap around the end of the sequences.
+NanoSimFormer detects genome circularity via the FASTA header (circular=true/false, see example FASTA below) to allow simulated reads to seamlessly wrap around the end of the sequences.
 
 *Example FASTA format*: 
 ```text 
@@ -132,7 +132,7 @@ python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/example.fastq
 ```
 
 #### Full Pipeline (Signal simulation + Basecalling) 
-Generate signals in a POD5 file and automatically run Dorado to basecall the reads into a FASTQ file.
+Use `--basecall` option to automatically run Dorado that basecalling the reads into a FASTQ file after signal simulation.
 
 ```shell 
 # Simulate 1000 reads from the chromosome 22 reference. 
