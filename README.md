@@ -1,26 +1,25 @@
 NanoSimFormer An end-to-end Transformer-based simulator for nanopore sequencing signal data
 -----
 
-NanoSimFormer is a high-fidelity nanopore sequencing signal simulator based on Transformer architectures. It supports both DNA (R10.4.1) and Direct RNA (RNA004) signal simulation, allowing users to generate synthetic POD5 files from references or existing basecalled reads.
+NanoSimFormer is a high-fidelity nanopore sequencing signal simulator built on Transformer architectures. It supports both DNA (R10.4.1) and Direct RNA (RNA004) signal simulation, enabling users to generate synthetic POD5 files from references or existing basecalled reads.
 
+## 🚀 Download and Installation
 
-## 🚀 Download and Install
+### System Requirements
 
-### System Dependencies
+  * **GPU:** NVIDIA GPU with CUDA compute capability \>= 8.x (e.g., Ampere, Ada, or Hopper GPUs like A100, RTX 3090, RTX 4090, H100)
+  * **Driver:** NVIDIA driver version \>= 450.80.02
+  * **CUDA:** CUDA Toolkit \>= 11.8
 
-  * NVIDIA GPU with CUDA compute capability \>= 8.x (e.g., Ampere, Ada, or Hopper GPUs like A100, RTX 3090, RTX 4090, H100)
-  * NVIDIA driver version \>= 450.80.02
-  * CUDA Toolkit \>= 11.8
+NanoSimFormer is compatible with Linux and has been fully tested on Ubuntu 22.04.
 
-NanoSimFormer can be installed on Linux and has been tested on Ubuntu 22.04.
-
-### Install from Docker 
+### Installation via Docker 
 
 We recommend installing NanoSimFormer using the pre-built Docker image. Ensure you have Docker and the NVIDIA Container Toolkit installed by 
 following this [tutorial](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
 ```shell 
-docker pull chobits323/NanoSimFormer:latest
+docker pull chobits323/nano-sim:latest 
 ```
 
 -----
@@ -29,13 +28,16 @@ docker pull chobits323/NanoSimFormer:latest
 
 ### Basic
 
-#### Using Docker
-```bash
-docker run --rm -it --gpus=all --ipc=host chobits323/NanaSimFormer:latest python -m nano_signal_simulator [-h]  ...
+#### Quick Start with Docker
+```shell
+# Define your working directory
+EXAMPLE_DIR="[WORKING_DIRECTORY_OF_EXAMPLE_DATA]"  # /home/user_name/NanoSimFormer/example (absolute path)
+
+# Print the help messages
+docker run --rm -it --gpus=all -v ${EXAMPLE_DIR}:${EXAMPLE_DIR} --ipc=host chobits323/nano-sim:latest python -m nano_signal_simulator [-h]  ...
 ```
 
 #### Subcommands and Options
-
 ```text
 usage: python -m nano_signal_simulator [-h] --input INPUT --output OUTPUT [--prefix PREFIX] [--basecall] --mode {Reference,Read} [--coverage COVERAGE] [--sample-reads SAMPLE_READS] [--sample-output SAMPLE_OUTPUT] [--trans-profile TRANS_PROFILE]
                                        [--gpu GPU] [--batch-size BATCH_SIZE] [--config CONFIG] --preset {ont_r1041_dna_5khz,ont_rna004_4khz} [--noise-stdv NOISE_STDV] [--duration-stdv DURATION_STDV] [--mean-read-length MEAN_READ_LENGTH]
@@ -81,73 +83,102 @@ options:
 
 ```
 
-### DNA Simulation Examples (R10.4.1)
+### DNA Sequencing Simulation Examples (R10.4.1)
 
-#### Reference-based Simulation
-Simulate reads from a reference FASTA under a specific read number a specific sequencing coverage.
+#### Reference-Based Simulation
+Simulate reads from a reference genome (FASTA) using a specific read number or targeted sequencing coverage.
 
-```text
-python -m nano_signal_simulator --input ref.fa --output ./out --mode Reference --preset ont_r1041_dna_5khz --sample-reads 1000
+```shell
+# Simulate 1000 reads from the chromosome 22 reference.
+# The output POD5 will be located at ${EXAMPLE_DIR}/DNA_R10.4.1/output/simulate.pod5
+python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/chr22.fasta --output ${EXAMPLE_DIR}/DNA_R10.4.1/output --mode Reference --sample-reads 1000 --gpu 0 --preset ont_r1041_dna_5khz 
+
+# Simulate reads with 0.1x sequencing depth from the chromosome 22 reference.
+python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/chr22.fasta --output ${EXAMPLE_DIR}/DNA_R10.4.1/output --mode Reference --coverage 0.1 --gpu 0 --preset ont_r1041_dna_5khz
 ```
 
 #### Adjusting Noise and Duration parameters
-Tune the stochastic properties of the synthetic signal.
+Adjust the standard deviation of the noise or duration samplers to generate simulated signals with varying qualities.
 
-```text
-python -m nano_signal_simulator --input ref.fa --output ./out --mode Reference --preset ont_r1041_dna_5khz --noise-stdv 1.5 --duration-stdv 0.8
+```shell 
+python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/chr22.fasta --output ${EXAMPLE_DIR}/DNA_R10.4.1/output --mode Reference --sample-reads 1000 --gpu 0 --preset ont_r1041_dna_5khz --noise-stdv 1.0 --duration-stdv 0.8
 ```
 
-#### Modifying Sampled read length 
-Change the mean read length or switch between statistical and exponential length distribution.
+#### Circular Reference-Based Simulation
+NanoSimFormer detects circularity via the FASTA header (circular=true/false, see example FASTA below) to allow simulated reads to seamlessly wrap around the end of the sequences.
 
-```text
-python -m nano_signal_simulator --input ref.fa --output ./out --mode Reference --preset ont_r1041_dna_5khz --mean-read-length 5000 --length-dist-mode expon
-```
-
-#### Circular Reference Simulation
-The simulator detects circularity via the FASTA header (circular=true) to allow reads to wrap around the end of the sequence.
-
+*Example FASTA format*: 
 ```text 
->chr_example circular=true
+>contig_1 circular=true
 ATCG...
+>contig_2 circular=false
+CGAA...
 ```
 
-```text 
-python -m nano_signal_simulator --input circular_ref.fa --output ./out --mode Reference --preset ont_r1041_dna_5khz
+```shell  
+# Simulate 1000 reads from a circular E.coli reference genome (including plasmids) 
+# utilizing a custom mean read length and an exponential read length distribution.
+python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/ecoli.fasta --output ${EXAMPLE_DIR}/DNA_R10.4.1/output --mode Reference --sample-reads 1000 --gpu 0 --preset ont_r1041_dna_5khz --mean-read-length 4394 --length-dist-mode expon 
 ```
 
 #### Read-based simulation
-Generate signals based on specific sequences in a FASTQ file. Note: read IDs in FASTQ file must be in UUID format for POD5 compatibility.
+Generate signals from basecalled reads provided in a FASTQ file (one-by-one). 
 
-```text 
-python -m nano_signal_simulator --input reads.fastq --output ./out --mode Read --preset ont_r1041_dna_5khz
+**Note**: Read IDs in FASTQ file must be in UUID format for POD5 compatibility.
+
+```shell 
+# Simulate reads from the FASTQ file one by one. 
+python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/example.fastq --output ${EXAMPLE_DIR}/DNA_R10.4.1/output --mode Read --gpu 0 --preset ont_r1041_dna_5khz
 ```
 
-#### Full Pipeline (Signal + Basecalling) simulation
+#### Full Pipeline (Signal simulation + Basecalling) 
+Generate signals in a POD5 file and automatically run Dorado to basecall the reads into a FASTQ file.
 
-Generate POD5 signals and automatically run Dorado to produce a FASTQ.
-
-```text 
-python -m nano_signal_simulator --input ref.fa --output ./out --mode Reference --preset ont_r1041_dna_5khz --basecall
+```shell 
+# Simulate 1000 reads from the chromosome 22 reference. 
+# The basecalled FASTQ output will be saved to ${EXAMPLE_DIR}/DNA_R10.4.1/output/simulate.fastq 
+python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/chr22.fasta --output ${EXAMPLE_DIR}/DNA_R10.4.1/output --mode Reference --sample-reads 1000 --gpu 0 --preset ont_r1041_dna_5khz --basecall 
 ```
 
+### Direct-RNA Sequencing Simulation Examples (RNA004)
+#### Transcriptome Reference-Based simulation
+For Direct RNA sequencing (DRS), NanoSimFormer requires a 3-column TSV profile defining `transcript_name`, `trunc_start`, and `trunc_end` to simulate realistic transcript abundances and 5'/3' truncations. 
+Each row in the profile TSV represents the metadata for a single simulated read.
 
-### DRS Simulation Examples (RNA004)
-#### Transcriptome simulation
-Requires a 3-column TSV profile defining transcript_name, trunc_start, and trunc_end, like below:
+*Example TSV Profile*: 
 
 | transcript_name | trunc_start | trunc_end |
-| --- | --- | --- |
-| ENST000001 | 0 | 1200 |
+|-----------------|-------------|-----------|
+| ENST000001      | 10          | 1200      |
 
-```text
-python -m nano_signal_simulator --input transcriptome.fa --output ./out --mode Reference --preset ont_rna004_4khz --trans-profile profile.tsv
+```shell 
+# Simulate DRS reads given a transcriptome reference and a custom transcript profile. 
+python -m nano_signal_simulator --input ${EXAMPLE_DIR}/RNA004/trans_ref.fasta --trans-profile ${EXAMPLE_DIR}/RNA004/trans_profile.tsv --output ${EXAMPLE_DIR}/RNA004/output --mode Reference --gpu 0 --preset ont_rna004_4khz --basecall
 ```
 
 -----
+
+## 🙏 Acknowledgement 
+
+Some code snippets used to build the model were adapted from [torchtune](https://github.com/meta-pytorch/torchtune) library. 
+We also integrated some preprocessing code snippets from [seq2squiggle](https://github.com/ZKI-PH-ImageAnalysis/seq2squiggle) to handle read sampling at given sequencing coverage.
+
+## 📖 Citation 
+
+Please cite our publication if you use `NanoSimFormer` in your work:
+
+```bibtex
+@article{nanosimformer,
+  title={NanoSimFormer: An end-to-end Transformer-based simulator for nanopore sequencing signal data},
+  author={Xie, Shaohui and Ding, Lulu and Liu, Ling and Zhu, Zexuan},
+  journal={bioRxiv},
+  pages={2026--01},
+  year={2026},
+  publisher={Cold Spring Harbor Laboratory}
+}
+```
 
 ## ©️ Copyright
 
 Copyright 2026 Zexuan Zhu <zhuzx@szu.edu.cn>.<br>
 This project is licensed under the Apache License 2.0. See the [LICENSE](./LICENSE) file for details.
-

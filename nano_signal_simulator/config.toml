@@ -44,7 +44,7 @@ sample_rate = 5000
 
 
 [ont_rna004_4khz]
-checkpoint = "rna004_v3"
+checkpoint = "rna004"
 chunksize = 1000
 max_duration_ranges = 7000
 

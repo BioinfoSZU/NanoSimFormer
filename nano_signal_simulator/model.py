@@ -347,7 +347,7 @@ class Model(nn.Module):
             vocab_size=5,
             padding_idx=0,
             decoder_dim=dim,
-            decoder_max_seq_len=1024,
+            decoder_max_seq_len=1024 if m_type == "DNA" else 4096,
             num_layers=12,
         )
 

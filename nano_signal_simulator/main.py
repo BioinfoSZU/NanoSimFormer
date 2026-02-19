@@ -10,6 +10,7 @@ import random
 import numpy as np
 import torch
 import uuid
+import pandas as pd
 from scipy.stats import gamma, beta, expon
 from enum import Enum
 from datetime import datetime
@@ -105,7 +106,7 @@ def reference_sampling(
     if mean_read_len > avg_genome_len:
         print(f'WARNING: Mean read length {mean_read_len} is larger than average genome length {avg_genome_len}.')
 
-    try_cnt = int(float(seq_num) / 0.99)
+    try_cnt = int(float(seq_num) / 0.97)
     if length_dist_mode == 'stat':
         with open(length_dist_model, "rb") as f:
             read_len_dist_df = pickle.load(f)
@@ -428,7 +429,7 @@ def main():
     parser.add_argument('--basecall', action="store_true", default=False, help='enable basecalling simulated reads (default: False)')
     parser.add_argument('--mode', type=str, choices=['Reference', 'Read'], required=True,
                         help='(Reference or Read) simulation mode')
-    parser.add_argument('--coverage', type=int, default=1, help='sequencing coverage (default: 1)')
+    parser.add_argument('--coverage', type=float, default=1, help='sequencing coverage (default: 1)')
     parser.add_argument('--sample-reads', type=int, default=-1,
                         help='number of reads to simulate (default: -1)')
     parser.add_argument('--sample-output', type=str, default=None,
