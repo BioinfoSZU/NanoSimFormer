@@ -93,7 +93,7 @@ def reference_sampling(
         sample_reads, coverage, sample_fasta_path,
         length_dist_mode, length_dist_model, expon_len_dist_loc, expon_len_dist_scale,
         min_read_len, max_read_len, mean_read_len, basic_mean_read_len,
-        seed, preset, max_retries=20, maximum_N_ratio=0.01,
+        seed, preset, max_retries=30, maximum_N_ratio=0.01,
 ):
     sample_fasta = open(sample_fasta_path, 'w') if sample_fasta_path is not None else None
 
@@ -105,6 +105,7 @@ def reference_sampling(
     if mean_read_len > avg_genome_len:
         print(f'WARNING: Mean read length {mean_read_len} is larger than average genome length {avg_genome_len}.')
 
+    try_cnt = int(float(seq_num) / 0.99)
     if length_dist_mode == 'stat':
         with open(length_dist_model, "rb") as f:
             read_len_dist_df = pickle.load(f)
@@ -112,7 +113,7 @@ def reference_sampling(
             read_len_dist_df,
             basic_mean_len=basic_mean_read_len,
             mean=mean_read_len,
-            num=seq_num,
+            num=try_cnt,  # seq_num,
             seed=seed,
             min_read_len=min_read_len,
             max_read_len=max_read_len,
@@ -123,7 +124,7 @@ def reference_sampling(
             scale=expon_len_dist_scale,
             basic_mean_len=basic_mean_read_len,
             mean=mean_read_len,
-            num=seq_num,
+            num=try_cnt,  # seq_num,
             seed=seed,
             min_read_len=min_read_len,
             max_read_len=max_read_len,
@@ -139,7 +140,7 @@ def reference_sampling(
     genome_seq_lens = np.asarray(genome_seq_lens)
     genome_seq_lens_cumsum = np.cumsum(np.r_[0, genome_seq_lens])
 
-    for sampled_read_idx in tqdm(range(seq_num), desc="Sample Reads ..."):
+    for sampled_read_idx in tqdm(range(try_cnt), desc="Sample Reads ..."):
         retries = 0
         while retries < max_retries:
             start_pos = random.randint(0, genome_total_len - 1)
@@ -182,7 +183,8 @@ def reference_sampling(
                 sampled_read_seqs.append(read)
                 sampled_read_names.append(read_name)
                 sampled_read_lens.append(read_length)
-                sampled_total_len += read_length
+                if len(sampled_read_seqs) <= seq_num:
+                    sampled_total_len += read_length
                 if sample_fasta is not None:
                     sample_fasta.write(f">{read_name}\n{read}\n")
                     sample_fasta.flush()
@@ -190,7 +192,7 @@ def reference_sampling(
             else:
                 retries += 1
 
-    return sampled_read_seqs, sampled_read_names, sampled_read_lens, sampled_total_len
+    return sampled_read_seqs[:seq_num], sampled_read_names[:seq_num], sampled_read_lens[:seq_num], sampled_total_len
 
 
 def transcript_sampling(tr_seqs, tr_seq_names, tr_seq_lens, tr_total_len, tr_profile):
@@ -573,7 +575,7 @@ def main():
     global_ranges = []
     global_seq_number = 0
     encode_dict = {'A': 1, 'C': 2, 'G': 3, 'T': 4, }
-    pod5_writer = pod5.Writer(output_path)
+    pod5_writer = pod5.Writer(output_path, software_name="NanoSimFormer")
     for idx, (__syn_seq, syn_seq_name, syn_seq_len, noise_std) in tqdm(enumerate(zip(seqs, seq_names, seq_lens, preload_noise_stds)), total=len(seqs)):
         if model_type == "DNA":
             syn_seq = __syn_seq
@@ -645,10 +647,8 @@ def main():
             print('WARNING - The cache is not empty ?')
 
     print(f'Simulated {global_seq_number} sequence.')
+    pod5_writer.close()  # make sure writing is finish
 
-    enable_basecall = args.basecall
-    if enable_basecall:
+    if args.basecall:
         basecall_model = os.path.join(MODEL_DIR, config['basecall']['model'])
-        basecall_fq_path = os.path.join(output_directory, f"{args.prefix}.fastq")
-        basecall_command = f"dorado basecaller --recursive --emit-fastq --device cuda:{gpu} {basecall_model} {output_directory} > {basecall_fq_path}"
-        _ = os.system(basecall_command)
+        exec_basecaller(output_directory, args.prefix, basecall_model, gpu)

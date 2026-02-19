@@ -1,3 +1,4 @@
+import os
 import random
 import numpy as np
 import re
@@ -134,3 +135,12 @@ def find_homopolymers_torch(x: torch.Tensor, x_lens: torch.Tensor, threshold: in
 
     return homo_all
 
+
+def exec_basecaller(output_directory, prefix, basecall_model, gpu):
+    basecall_fq_path = os.path.join(output_directory, f"{prefix}.fastq")
+    basecall_lib_path = "/usr/local/lib/dorado"
+    lib_env = ""
+    if os.path.exists(basecall_lib_path):
+        lib_env = f"LD_LIBRARY_PATH={basecall_lib_path}:$LD_LIBRARY_PATH"
+    basecall_command = f"{lib_env} dorado basecaller --recursive --emit-fastq --device cuda:{gpu} {basecall_model} {output_directory} > {basecall_fq_path}"
+    _ = os.system(basecall_command)
