@@ -23,7 +23,7 @@ following this [tutorial](https://docs.nvidia.com/datacenter/cloud-native/contai
 docker pull chobits323/nano-sim:latest 
 ```
 
-**For non-Docker users:** You must manually download the pre-trained model files from Zenodo ([https://doi.org/10.5281/zenodo.18942634](https://doi.org/10.5281/zenodo.18942634)) and place them in the `nano_signal_simulator/models/` directory prior to running simulations.
+**Note:** The Docker image already contains all required pre-trained model files. If you wish to obtain the model files separately (e.g., for non-Docker usage), you can download them from [Zenodo](https://doi.org/10.5281/zenodo.18942634) and place them in the `nano_signal_simulator/models/` directory.
 
 -----
 
@@ -163,7 +163,7 @@ python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/chr22.fasta -
 # Multi-GPU with basecalling
 python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/chr22.fasta --output ${EXAMPLE_DIR}/DNA_R10.4.1/output --mode Reference --sample-reads 10000 --preset ont_r1041_dna_5khz --multi-gpu --basecall
 ```
-*(Note: To accelerate the simulation process, you can increase the `--batch-size` parameter (default: 64) if your GPU has sufficient memory.)*
+*Note: To accelerate the simulation process, you can increase the `--batch-size` parameter (default: 64) if your GPU has sufficient memory.*
 
 ### Direct-RNA Sequencing Simulation Examples (RNA004)
 #### Transcriptome Reference-Based simulation
