@@ -9,6 +9,7 @@ import toml
 import random
 import numpy as np
 import torch
+import torch.multiprocessing as mp
 import uuid
 import pandas as pd
 from scipy.stats import gamma, beta, expon
@@ -106,7 +107,7 @@ def reference_sampling(
     if mean_read_len > avg_genome_len:
         print(f'WARNING: Mean read length {mean_read_len} is larger than average genome length {avg_genome_len}.')
 
-    try_cnt = int(float(seq_num) / 0.97)
+    try_cnt = int(float(seq_num) / 0.98)
     if length_dist_mode == 'stat':
         with open(length_dist_model, "rb") as f:
             read_len_dist_df = pickle.load(f)
@@ -261,7 +262,11 @@ def preprocess(path, _type, _mode):
             for read in bam:
                 rid = read.query_name
                 if _mode == Mode.REFERENCE:
-                    seq = get_canonical_seq(read.get_reference_sequence())  # require MD tag
+                    # require MD tag for reference-mode and bam input
+                    if read.is_reverse:
+                        seq = mappy.revcomp(get_canonical_seq(read.get_reference_sequence()))
+                    else:
+                        seq = get_canonical_seq(read.get_reference_sequence())
                 else:
                     seq = get_canonical_seq(read.query_sequence)
                 seqs.append(seq)
@@ -333,7 +338,7 @@ def syn_seq_batch_version(
         shape=x.shape,
         dtype=torch.long,
         device=device,
-        min_val=1
+        min_val=int(config['duration_params']['min']),
     )
 
     if model_type == "DNA":
@@ -419,6 +424,247 @@ def write_pod5(signal, seq_id, seq_number, config, pod5_writer: pod5.Writer, run
     ))
 
 
+def merge_pod5_files(tmp_paths, output_path):
+    """Merge multiple temporary POD5 files into one final output."""
+    with pod5.Writer(output_path, software_name="NanoSimFormer") as writer:
+        for tmp in tmp_paths:
+            with pod5.Reader(tmp) as reader:
+                for read in reader.reads():
+                    writer.add_read(read.to_read())
+            os.remove(tmp)
+
+
+def run_inference_single_gpu(
+        gpu, model, seqs, seq_names, seq_lens, noise_stds,
+        config, model_type, mode, batch_size, duration_stdv,
+        output_path, seq_number_offset=0, desc_prefix="",
+):
+    """Run inference loop on a single GPU and write results to a POD5 file.
+
+    This is the core inference loop extracted from main(), used both for
+    single-GPU mode and as the per-worker body in multi-GPU mode.
+    """
+    encode_dict = {'A': 1, 'C': 2, 'G': 3, 'T': 4}
+
+    pod5_params = config['pod5_params']
+    global_run_info = pod5.RunInfo(
+        acquisition_id=str(uuid.uuid4()),
+        acquisition_start_time=datetime.now(),
+        adc_max=pod5_params['adc_max'],
+        adc_min=pod5_params['adc_min'],
+        context_tags={},
+        experiment_name="PGXXSX240041",
+        flow_cell_id="PAS76629",
+        flow_cell_product_code=pod5_params['flow_cell'],
+        protocol_name=pod5_params['protocol_name'],
+        protocol_run_id=str(uuid.uuid4()),
+        protocol_start_time=datetime.now(),
+        sample_id="simulation",
+        sample_rate=pod5_params['sample_rate'],
+        sequencing_kit=pod5_params['sequencing_kit'],
+        sequencer_position="5B",
+        sequencer_position_type="PromethION",
+        software="",
+        system_name="PC48B226",
+        system_type="PromethION 48",
+        tracking_id={},
+    )
+
+    cache = {}
+    global_chunks = None
+    global_chunk_lens = []
+    global_chunk_noises = []
+    global_ranges = []
+    global_seq_number = seq_number_offset
+
+    pod5_writer = pod5.Writer(output_path, software_name="NanoSimFormer")
+    tqdm_desc = f"{desc_prefix}GPU:{gpu}" if desc_prefix else f"GPU:{gpu}"
+    for idx, (__syn_seq, syn_seq_name, syn_seq_len, noise_std) in tqdm(
+            enumerate(zip(seqs, seq_names, seq_lens, noise_stds)),
+            total=len(seqs), desc=tqdm_desc):
+        if model_type == "DNA":
+            syn_seq = __syn_seq
+        else:
+            syn_seq = __syn_seq[::-1]
+
+        x = torch.from_numpy(np.array([encode_dict[ch] for ch in syn_seq])).to(torch.long)
+        if model_type == "DNA":
+            x, x_lens = split_into_chunks(x, chunk_length=config['chunksize'])
+        else:
+            x, x_lens = split_into_chunks_random(x, min_len=500, max_len=config['chunksize'], len_threshold=80)
+
+        num_chunks = x.shape[0]
+        for cid in range(num_chunks):
+            global_ranges.append(syn_seq_name)
+        cache[syn_seq_name] = ([], num_chunks)
+
+        if global_chunks is None:
+            global_chunks = x
+        else:
+            global_chunks = torch.cat((global_chunks, x), dim=0)  # type: ignore
+        global_chunk_lens.extend(x_lens.tolist())
+        global_chunk_noises.extend([noise_std for _ in range(num_chunks)])
+
+        if len(global_chunks) >= batch_size:
+            syn_sigs, syn_sig_lens = syn_seq_batch_version(
+                model=model,
+                x=global_chunks[:batch_size].cuda(gpu, non_blocking=True),
+                x_lens=torch.from_numpy(np.array(global_chunk_lens[:batch_size])).to(torch.long).cuda(gpu, non_blocking=True),
+                x_noises=torch.from_numpy(np.array(global_chunk_noises[:batch_size])).to(torch.float32).cuda(gpu, non_blocking=True),
+                config=config,
+                model_type=model_type,
+                duration_stdv=duration_stdv,
+            )
+            for b in range(len(syn_sigs)):
+                curr_syn_seq_id = global_ranges[b]
+                cache[curr_syn_seq_id][0].append(syn_sigs[b, :syn_sig_lens[b]])
+                if len(cache[curr_syn_seq_id][0]) == cache[curr_syn_seq_id][1]:
+                    final_sig = torch.cat(cache[curr_syn_seq_id][0]).to(torch.float32).numpy()
+                    write_pod5(final_sig, seq_id=curr_syn_seq_id, seq_number=global_seq_number, config=config,
+                               pod5_writer=pod5_writer, run_info=global_run_info, mode=mode)
+                    global_seq_number += 1
+                    _ = cache.pop(curr_syn_seq_id, None)
+            global_chunks = global_chunks[batch_size:]
+            global_chunk_lens = global_chunk_lens[batch_size:]
+            global_chunk_noises = global_chunk_noises[batch_size:]
+            global_ranges = global_ranges[batch_size:]
+
+    if global_chunks is not None and len(global_chunks) > 0:
+        syn_sigs, syn_sig_lens = syn_seq_batch_version(
+            model=model,
+            x=global_chunks.cuda(gpu, non_blocking=True),
+            x_lens=torch.from_numpy(np.array(global_chunk_lens)).to(torch.long).cuda(gpu, non_blocking=True),
+            x_noises=torch.from_numpy(np.array(global_chunk_noises)).to(torch.float32).cuda(gpu, non_blocking=True),
+            config=config,
+            model_type=model_type,
+            duration_stdv=duration_stdv,
+        )
+        for b in range(len(syn_sigs)):
+            curr_syn_seq_id = global_ranges[b]
+            cache[curr_syn_seq_id][0].append(syn_sigs[b, :syn_sig_lens[b]])
+            if len(cache[curr_syn_seq_id][0]) == cache[curr_syn_seq_id][1]:
+                final_sig = torch.cat(cache[curr_syn_seq_id][0]).to(torch.float32).numpy()
+                write_pod5(final_sig, seq_id=curr_syn_seq_id, seq_number=global_seq_number, config=config,
+                           pod5_writer=pod5_writer, run_info=global_run_info, mode=mode)
+                global_seq_number += 1
+                _ = cache.pop(curr_syn_seq_id, None)
+        if len(cache) > 0:
+            print(f'WARNING - The cache on GPU:{gpu} is not empty.')
+
+    num_written = global_seq_number - seq_number_offset
+    pod5_writer.close()
+    return num_written
+
+
+def _gpu_worker(gpu_id, assigned_seqs, assigned_names, assigned_lens, assigned_noises,
+                config, model_type, mode, batch_size, duration_stdv,
+                tmp_output_path, seq_number_offset, result_queue):
+    """Worker function spawned per GPU for multi-GPU inference."""
+    try:
+        torch.cuda.set_device(gpu_id)
+
+        model = Model(dim=512, m_type=model_type)
+        model = model.cuda(gpu_id)
+        model_checkpoint_path = str(os.path.join(MODEL_DIR, config['checkpoint'], 'model.pth'))
+        with safe_globals():
+            checkpoint = torch.load(model_checkpoint_path, map_location=f'cuda:{gpu_id}')
+        model.load_state_dict(checkpoint)
+        model.eval()
+
+        num_written = run_inference_single_gpu(
+            gpu=gpu_id,
+            model=model,
+            seqs=assigned_seqs,
+            seq_names=assigned_names,
+            seq_lens=assigned_lens,
+            noise_stds=assigned_noises,
+            config=config,
+            model_type=model_type,
+            mode=mode,
+            batch_size=batch_size,
+            duration_stdv=duration_stdv,
+            output_path=tmp_output_path,
+            seq_number_offset=seq_number_offset,
+        )
+        result_queue.put((gpu_id, num_written, tmp_output_path, None))
+    except Exception as e:
+        result_queue.put((gpu_id, 0, tmp_output_path, str(e)))
+
+
+def run_multigpu_inference(
+        gpu_ids, seqs, seq_names, seq_lens, noise_stds,
+        config, model_type, mode, batch_size, duration_stdv,
+        output_directory, output_path,
+):
+    """Orchestrate multi-GPU inference by partitioning reads across GPUs."""
+    num_gpus = len(gpu_ids)
+    num_reads = len(seqs)
+    print(f"Multi-GPU inference: distributing {num_reads} reads across {num_gpus} GPUs {gpu_ids}")
+
+    # Round-robin partition reads across GPUs for load balance
+    partitions = {gid: ([], [], [], []) for gid in gpu_ids}
+    for i in range(num_reads):
+        gid = gpu_ids[i % num_gpus]
+        partitions[gid][0].append(seqs[i])
+        partitions[gid][1].append(seq_names[i])
+        partitions[gid][2].append(seq_lens[i])
+        partitions[gid][3].append(noise_stds[i])
+
+    # Compute seq_number offsets so global numbering is consistent
+    seq_number_offsets = {}
+    offset = 0
+    for gid in gpu_ids:
+        seq_number_offsets[gid] = offset
+        offset += len(partitions[gid][0])
+
+    # Spawn worker processes
+    mp.set_start_method('spawn', force=True)
+    result_queue = mp.Queue()
+    processes = []
+    tmp_paths = []
+
+    for gid in gpu_ids:
+        tmp_path = os.path.join(output_directory, f"tmp_gpu{gid}.pod5")
+        tmp_paths.append(tmp_path)
+        p_seqs, p_names, p_lens, p_noises = partitions[gid]
+        p = mp.Process(
+            target=_gpu_worker,
+            args=(
+                gid, p_seqs, p_names, p_lens, p_noises,
+                config, model_type, mode, batch_size, duration_stdv,
+                tmp_path, seq_number_offsets[gid], result_queue,
+            ),
+        )
+        p.start()
+        processes.append(p)
+
+    # Wait for all workers to finish
+    results = []
+    for _ in processes:
+        results.append(result_queue.get())
+    for p in processes:
+        p.join()
+
+    # Check for errors
+    total_written = 0
+    finished_tmp_paths = []
+    for gpu_id, num_written, tmp_path, error in sorted(results, key=lambda r: r[0]):
+        if error is not None:
+            print(f"ERROR on GPU:{gpu_id}: {error}")
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            continue
+        print(f"GPU:{gpu_id} simulated {num_written} reads.")
+        total_written += num_written
+        finished_tmp_paths.append(tmp_path)
+
+    # Merge temporary POD5 files into final output
+    print(f"Merging {len(finished_tmp_paths)} temporary POD5 files...")
+    merge_pod5_files(finished_tmp_paths, output_path)
+    print(f"Total simulated: {total_written} reads.")
+    return total_written
+
+
 def main():
     parser = ArgumentParser(prog="python -m nano_signal_simulator", description="Nanopore sequencing signal simulator")
     parser.add_argument('--input', type=str, required=True,
@@ -427,6 +673,7 @@ def main():
     parser.add_argument('--output', type=str, required=True, help='output directory')
     parser.add_argument('--prefix', type=str, default='simulate', help='output prefix (default: simulate)')
     parser.add_argument('--basecall', action="store_true", default=False, help='enable basecalling simulated reads (default: False)')
+    parser.add_argument('--emit-bam', action='store_true', default=False, help='basecalling simulated reads are stored in BAM files (default: False)')
     parser.add_argument('--mode', type=str, choices=['Reference', 'Read'], required=True,
                         help='(Reference or Read) simulation mode')
     parser.add_argument('--coverage', type=float, default=1, help='sequencing coverage (default: 1)')
@@ -450,8 +697,27 @@ def main():
     parser.add_argument('--length-dist-mode', type=str, choices=['stat', 'expon'], default='stat',
                         help='simulated read length using exponential distribution or statistical model derived from the HG002 R10.4.1 sample (default: stat)')
     parser.add_argument('--seed', type=int, default=42, help='random seed (default: 42)')
+    parser.add_argument('--multi-gpu', action='store_true', default=False,
+                        help='enable multi-GPU inference using all available GPUs (default: False)')
+    parser.add_argument('--gpus', type=str, default=None,
+                        help='comma-separated GPU ids for multi-GPU inference, e.g. "0,1,2" ')
     parser.add_argument('--version', action="version", version=f"NanoSimFormer {__version__}")
     args = parser.parse_args()
+
+    # Resolve GPU configuration
+    use_multi_gpu = args.multi_gpu or args.gpus is not None
+    gpu_ids = None
+    if args.gpus is not None:
+        gpu_ids = [int(g.strip()) for g in args.gpus.split(',')]
+        if len(gpu_ids) == 1:
+            use_multi_gpu = False
+            args.gpu = gpu_ids[0]
+    elif use_multi_gpu:
+        gpu_ids = list(range(torch.cuda.device_count()))
+        if len(gpu_ids) <= 1:
+            print('WARNING: --multi-gpu specified but only 1 GPU available, falling back to single-GPU mode.')
+            use_multi_gpu = False
+            args.gpu = gpu_ids[0]
 
     gpu = args.gpu
     batch_size = args.batch_size
@@ -509,19 +775,10 @@ def main():
                 tr_profile=args.trans_profile,
             )
 
-    model = Model(
-        dim=512,
-        m_type=model_type,
-    )
-    model = model.cuda(gpu)
+    # Validate model checkpoint exists before spawning workers
     model_checkpoint_path = str(os.path.join(MODEL_DIR, config['checkpoint'], 'model.pth'))
-    if os.path.isfile(model_checkpoint_path):
-        with safe_globals():
-            checkpoint = torch.load(model_checkpoint_path, map_location=f'cuda:{gpu}')
-        model.load_state_dict(checkpoint)
-    else:
+    if not os.path.isfile(model_checkpoint_path):
         raise RuntimeError('no checkpoint found')
-    model.eval()
 
     num_syn_seqs = len(seqs)
     if args.noise_stdv is None:
@@ -539,117 +796,47 @@ def main():
     else:
         preload_noise_stds = [args.noise_stdv] * num_syn_seqs
 
-    pod5_params = config['pod5_params']
-    adc_max = pod5_params['adc_max']
-    adc_min = pod5_params['adc_min']
-    flow_cell = pod5_params['flow_cell']
-    sequencing_kit = pod5_params['sequencing_kit']
-    protocol_name = pod5_params['protocol_name']
-    sample_rate = pod5_params['sample_rate']
-    global_run_info = pod5.RunInfo(
-        acquisition_id=str(uuid.uuid4()),
-        acquisition_start_time=datetime.now(),
-        adc_max=adc_max,
-        adc_min=adc_min,
-        context_tags={},
-        experiment_name="PGXXSX240041",
-        flow_cell_id="PAS76629",
-        flow_cell_product_code=flow_cell,
-        protocol_name=protocol_name,
-        protocol_run_id=str(uuid.uuid4()),
-        protocol_start_time=datetime.now(),
-        sample_id="simulation",
-        sample_rate=sample_rate,
-        sequencing_kit=sequencing_kit,
-        sequencer_position="5B",
-        sequencer_position_type="PromethION",
-        software="",
-        system_name="PC48B226",
-        system_type="PromethION 48",
-        tracking_id={},
-    )
-
-    cache = {}
-    global_chunks = None
-    global_chunk_lens = []
-    global_chunk_noises = []
-    global_ranges = []
-    global_seq_number = 0
-    encode_dict = {'A': 1, 'C': 2, 'G': 3, 'T': 4, }
-    pod5_writer = pod5.Writer(output_path, software_name="NanoSimFormer")
-    for idx, (__syn_seq, syn_seq_name, syn_seq_len, noise_std) in tqdm(enumerate(zip(seqs, seq_names, seq_lens, preload_noise_stds)), total=len(seqs)):
-        if model_type == "DNA":
-            syn_seq = __syn_seq
-        else:
-            syn_seq = __syn_seq[::-1]
-
-        x = torch.from_numpy(np.array([encode_dict[ch] for ch in syn_seq])).to(torch.long)
-        if model_type == "DNA":
-            x, x_lens = split_into_chunks(x, chunk_length=config['chunksize'])
-        else:
-            x, x_lens = split_into_chunks_random(x, min_len=500, max_len=config['chunksize'], len_threshold=80)
-
-        num_chunks = x.shape[0]
-        for cid in range(num_chunks):
-            global_ranges.append(syn_seq_name)
-        cache[syn_seq_name] = ([], num_chunks)
-
-        if global_chunks is None:
-            global_chunks = x
-        else:
-            global_chunks = torch.cat((global_chunks, x), dim=0)  # type: ignore
-        global_chunk_lens.extend(x_lens.tolist())
-        global_chunk_noises.extend([noise_std for _ in range(num_chunks)])
-
-        if len(global_chunks) >= batch_size:
-            syn_sigs, syn_sig_lens = syn_seq_batch_version(
-                model=model,
-                x=global_chunks[:batch_size].cuda(gpu, non_blocking=True),
-                x_lens=torch.from_numpy(np.array(global_chunk_lens[:batch_size])).to(torch.long).cuda(gpu, non_blocking=True),
-                x_noises=torch.from_numpy(np.array(global_chunk_noises[:batch_size])).to(torch.float32).cuda(gpu, non_blocking=True),
-                config=config,
-                model_type=model_type,
-                duration_stdv=args.duration_stdv,
-            )
-            for b in range(len(syn_sigs)):
-                curr_syn_seq_id = global_ranges[b]
-                cache[curr_syn_seq_id][0].append(syn_sigs[b, :syn_sig_lens[b]])
-                if len(cache[curr_syn_seq_id][0]) == cache[curr_syn_seq_id][1]:
-                    final_sig = torch.cat(cache[curr_syn_seq_id][0]).to(torch.float32).numpy()
-                    write_pod5(final_sig, seq_id=curr_syn_seq_id, seq_number=global_seq_number, config=config,
-                               pod5_writer=pod5_writer, run_info=global_run_info, mode=mode)
-                    global_seq_number += 1
-                    _ = cache.pop(curr_syn_seq_id, None)
-            global_chunks = global_chunks[batch_size:]
-            global_chunk_lens = global_chunk_lens[batch_size:]
-            global_chunk_noises = global_chunk_noises[batch_size:]
-            global_ranges = global_ranges[batch_size:]
-
-    if global_chunks is not None and len(global_chunks) > 0:
-        syn_sigs, syn_sig_lens = syn_seq_batch_version(
-            model=model,
-            x=global_chunks.cuda(gpu, non_blocking=True),
-            x_lens=torch.from_numpy(np.array(global_chunk_lens)).to(torch.long).cuda(gpu, non_blocking=True),
-            x_noises=torch.from_numpy(np.array(global_chunk_noises)).to(torch.float32).cuda(gpu, non_blocking=True),
+    if use_multi_gpu:
+        # -- Multi-GPU path --
+        run_multigpu_inference(
+            gpu_ids=gpu_ids,
+            seqs=seqs,
+            seq_names=seq_names,
+            seq_lens=seq_lens,
+            noise_stds=preload_noise_stds,
             config=config,
             model_type=model_type,
+            mode=mode,
+            batch_size=batch_size,
             duration_stdv=args.duration_stdv,
+            output_directory=str(output_directory),
+            output_path=output_path,
         )
-        for b in range(len(syn_sigs)):
-            curr_syn_seq_id = global_ranges[b]
-            cache[curr_syn_seq_id][0].append(syn_sigs[b, :syn_sig_lens[b]])
-            if len(cache[curr_syn_seq_id][0]) == cache[curr_syn_seq_id][1]:
-                final_sig = torch.cat(cache[curr_syn_seq_id][0]).to(torch.float32).numpy()
-                write_pod5(final_sig, seq_id=curr_syn_seq_id, seq_number=global_seq_number, config=config,
-                           pod5_writer=pod5_writer, run_info=global_run_info, mode=mode)
-                global_seq_number += 1
-                _ = cache.pop(curr_syn_seq_id, None)
-        if len(cache) > 0:
-            print('WARNING - The cache is not empty ?')
+    else:
+        # -- Single-GPU path --
+        model = Model(dim=512, m_type=model_type)
+        model = model.cuda(gpu)
+        with safe_globals():
+            checkpoint = torch.load(model_checkpoint_path, map_location=f'cuda:{gpu}')
+        model.load_state_dict(checkpoint)
+        model.eval()
 
-    print(f'Simulated {global_seq_number} sequence.')
-    pod5_writer.close()  # make sure writing is finish
+        num_written = run_inference_single_gpu(
+            gpu=gpu,
+            model=model,
+            seqs=seqs,
+            seq_names=seq_names,
+            seq_lens=seq_lens,
+            noise_stds=preload_noise_stds,
+            config=config,
+            model_type=model_type,
+            mode=mode,
+            batch_size=batch_size,
+            duration_stdv=args.duration_stdv,
+            output_path=output_path,
+        )
+        print(f'Simulated {num_written} reads.')
 
     if args.basecall:
         basecall_model = os.path.join(MODEL_DIR, config['basecall']['model'])
-        exec_basecaller(output_directory, args.prefix, basecall_model, gpu)
+        exec_basecaller(output_directory, args.prefix, basecall_model, gpu_ids if gpu_ids is not None else gpu, args.emit_bam)

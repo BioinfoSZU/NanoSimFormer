@@ -19,6 +19,7 @@ basic_mean_len = 6760.0
 dist = "gaussian"
 mean = 2.0
 stdv = 0.5
+min = 1.0
 
 [ont_r1041_dna_5khz.noise_intensity_params]
 dist = "gamma"
@@ -55,6 +56,7 @@ model = "rna004_130bps_sup@v5.0.0"
 dist = "gamma"
 mean = 6.0
 stdv = 4.24
+min = 1.0
 
 [ont_rna004_4khz.noise_intensity_params]
 dist = "gamma"

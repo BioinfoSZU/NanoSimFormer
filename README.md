@@ -40,9 +40,9 @@ docker run --rm -it --gpus=all -v ${EXAMPLE_DIR}:${EXAMPLE_DIR} --ipc=host chobi
 
 #### Subcommands and Options
 ```text
-usage: python -m nano_signal_simulator [-h] --input INPUT --output OUTPUT [--prefix PREFIX] [--basecall] --mode {Reference,Read} [--coverage COVERAGE] [--sample-reads SAMPLE_READS] [--sample-output SAMPLE_OUTPUT] [--trans-profile TRANS_PROFILE]
+usage: python -m nano_signal_simulator [-h] --input INPUT --output OUTPUT [--prefix PREFIX] [--basecall] [--emit-bam] --mode {Reference,Read} [--coverage COVERAGE] [--sample-reads SAMPLE_READS] [--sample-output SAMPLE_OUTPUT] [--trans-profile TRANS_PROFILE]
                                        [--gpu GPU] [--batch-size BATCH_SIZE] [--config CONFIG] --preset {ont_r1041_dna_5khz,ont_rna004_4khz} [--noise-stdv NOISE_STDV] [--duration-stdv DURATION_STDV] [--mean-read-length MEAN_READ_LENGTH]
-                                       [--min-read-length MIN_READ_LENGTH] [--max-read-length MAX_READ_LENGTH] [--length-dist-mode {stat,expon}] [--seed SEED] [--version]
+                                       [--min-read-length MIN_READ_LENGTH] [--max-read-length MAX_READ_LENGTH] [--length-dist-mode {stat,expon}] [--seed SEED] [--multi-gpu] [--gpus GPUS] [--version]
 
 Nanopore sequencing signal simulator
 
@@ -52,6 +52,7 @@ options:
   --output OUTPUT       output directory
   --prefix PREFIX       output prefix (default: simulate)
   --basecall            enable basecalling simulated reads (default: False)
+  --emit-bam            basecalling simulated reads are stored in BAM files (default: False)
   --mode {Reference,Read}
                         (Reference or Read) simulation mode
   --coverage COVERAGE   sequencing coverage (default: 1)
@@ -80,6 +81,8 @@ options:
   --length-dist-mode {stat,expon}
                         simulated read length using exponential distribution or statistical model derived from the HG002 R10.4.1 sample (default: stat)
   --seed SEED           random seed (default: 42)
+  --multi-gpu           enable multi-GPU inference using all available GPUs (default: False)
+  --gpus GPUS           comma-separated GPU ids for multi-GPU inference, e.g. "0,1,2"
   --version             show program's version number and exit
 
 ```
@@ -134,12 +137,31 @@ python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/example.fastq
 
 #### Full Pipeline (Signal simulation + Basecalling) 
 Use `--basecall` option to automatically run [Dorado](https://github.com/nanoporetech/dorado) that basecalling the reads into a FASTQ file after signal simulation.
+Use `--emit-bam` together with `--basecall` to output basecalled results in BAM format instead of FASTQ.
 
 ```shell 
 # Simulate 1000 reads from the chromosome 22 reference. 
 # The basecalled FASTQ output will be saved to ${EXAMPLE_DIR}/DNA_R10.4.1/output/simulate.fastq 
 python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/chr22.fasta --output ${EXAMPLE_DIR}/DNA_R10.4.1/output --mode Reference --sample-reads 1000 --gpu 0 --preset ont_r1041_dna_5khz --basecall 
+
+# Output basecalled results in BAM format instead of FASTQ
+python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/chr22.fasta --output ${EXAMPLE_DIR}/DNA_R10.4.1/output --mode Reference --sample-reads 1000 --gpu 0 --preset ont_r1041_dna_5khz --basecall --emit-bam
 ```
+
+#### Multi-GPU Inference
+Use `--multi-gpu` to automatically distribute reads across all available GPUs, or `--gpus` to specify exact GPU IDs. 
+
+```shell
+# Use all available GPUs
+python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/chr22.fasta --output ${EXAMPLE_DIR}/DNA_R10.4.1/output --mode Reference --sample-reads 10000 --preset ont_r1041_dna_5khz --multi-gpu
+
+# Use specific GPUs (e.g., GPU 0 and GPU 2)
+python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/chr22.fasta --output ${EXAMPLE_DIR}/DNA_R10.4.1/output --mode Reference --sample-reads 10000 --preset ont_r1041_dna_5khz --gpus 0,2
+
+# Multi-GPU with basecalling
+python -m nano_signal_simulator --input ${EXAMPLE_DIR}/DNA_R10.4.1/chr22.fasta --output ${EXAMPLE_DIR}/DNA_R10.4.1/output --mode Reference --sample-reads 10000 --preset ont_r1041_dna_5khz --multi-gpu --basecall
+```
+*(Note: To accelerate the simulation process, you can increase the `--batch-size` parameter (default: 64) if your GPU has sufficient memory.)*
 
 ### Direct-RNA Sequencing Simulation Examples (RNA004)
 #### Transcriptome Reference-Based simulation
