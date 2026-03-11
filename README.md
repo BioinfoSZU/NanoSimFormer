@@ -23,6 +23,8 @@ following this [tutorial](https://docs.nvidia.com/datacenter/cloud-native/contai
 docker pull chobits323/nano-sim:latest 
 ```
 
+**For non-Docker users:** You must manually download the pre-trained model files from Zenodo ([https://doi.org/10.5281/zenodo.18942634](https://doi.org/10.5281/zenodo.18942634)) and place them in the `nano_signal_simulator/models/` directory prior to running simulations.
+
 -----
 
 ## ⚙️ Usage
